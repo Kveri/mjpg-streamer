@@ -79,6 +79,8 @@ struct _control {
 
 struct _globals {
     int stop;
+    int paused;
+    int clean;
 
     /* input plugin */
     input in[MAX_INPUT_PLUGINS];

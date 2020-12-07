@@ -226,6 +226,7 @@ int output_run(int id)
 
     /* create thread and pass context to thread function */
     pthread_create(&(servers[id].threadID), NULL, server_thread, &(servers[id]));
+    pthread_setname_np(servers[id].threadID, "HTTP Server");
     pthread_detach(servers[id].threadID);
 
     return 0;

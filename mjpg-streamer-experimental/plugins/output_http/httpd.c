@@ -36,6 +36,8 @@
 #include <netdb.h>
 #include <errno.h>
 #include <limits.h>
+#include <turbojpeg.h>
+#include <signal.h>
 
 #include <linux/version.h>
 #include <linux/types.h>          /* for videodev2.h */
@@ -480,7 +482,9 @@ void send_stream(cfd *context_fd, int input_number)
     while(!pglobal->stop) {
 
         /* wait for fresh frames */
+        DBG("send_stream() waiting 1\n");
         pthread_mutex_lock(&pglobal->in[input_number].db);
+        DBG("send_stream() waiting 2 %p\n", &pglobal->in[input_number].db_update);
         pthread_cond_wait(&pglobal->in[input_number].db_update, &pglobal->in[input_number].db);
 
         /* read buffer */
@@ -513,6 +517,24 @@ void send_stream(cfd *context_fd, int input_number)
         update_client_timestamp(context_fd->client);
         #endif
 
+	/*
+	DBG("ok so far 0\n");
+	int width, height, jpegSubsamp;
+	long unsigned int jpegSize = 0;
+	unsigned char *mybuf = NULL, *mybuf2 = NULL;
+	mybuf = (unsigned char *) malloc(3280*2464*3);
+	DBG("ok so far 1\n");
+	tjhandle _jpegDecompressor = tjInitDecompress();
+	tjDecompressHeader2(_jpegDecompressor, frame, frame_size, &width, &height, &jpegSubsamp);
+	tjDecompress2(_jpegDecompressor, frame, frame_size, mybuf, width, 0, height, TJPF_RGB, TJFLAG_FASTDCT);
+	DBG("ok so far 2\n");
+
+	tjhandle _jpegCompressor = tjInitCompress();
+	tjCompress2(_jpegCompressor, mybuf, 3280, 0, 2464, TJPF_RGB, &mybuf2, &jpegSize, TJSAMP_444, 75, TJFLAG_FASTDCT);
+	DBG("ok so far 3\n");
+	*/
+	
+
         /*
          * print the individual mimetype and the length
          * sending the content-length fixes random stream disruption observed
@@ -522,15 +544,24 @@ void send_stream(cfd *context_fd, int input_number)
                 "Content-Length: %d\r\n" \
                 "X-Timestamp: %d.%06d\r\n" \
                 "\r\n", frame_size, (int)timestamp.tv_sec, (int)timestamp.tv_usec);
+//                "\r\n", jpegSize, (int)timestamp.tv_sec, (int)timestamp.tv_usec);
         DBG("sending intemdiate header\n");
         if(write(context_fd->fd, buffer, strlen(buffer)) < 0) break;
 
         DBG("sending frame\n");
         if(write(context_fd->fd, frame, frame_size) < 0) break;
+//        if(write(context_fd->fd, mybuf2, jpegSize) < 0) break;
 
         DBG("sending boundary\n");
         sprintf(buffer, "\r\n--" BOUNDARY "\r\n");
         if(write(context_fd->fd, buffer, strlen(buffer)) < 0) break;
+
+	/*
+	free(mybuf);
+//	tjDestroy(_jpegDecompressor);
+	tjDestroy(_jpegCompressor);
+	tjFree(mybuf2);
+	*/
     }
 
     free(frame);
@@ -1442,6 +1473,17 @@ void server_cleanup(void *arg)
         close(pcontext->sd[i]);
 }
 
+
+void mask_sig(void)
+{
+	sigset_t mask;
+	sigemptyset(&mask); 
+	sigaddset(&mask, SIGRTMIN+3); 
+
+	pthread_sigmask(SIG_BLOCK, &mask, NULL);
+					        
+}
+
 /******************************************************************************
 Description.: Open a TCP socket and wait for clients to connect. If clients
               connect, start a new thread for each accepted connection.
@@ -1461,6 +1503,10 @@ void *server_thread(void *arg)
     char name[NI_MAXHOST];
     int err;
     int i;
+    char namebuf[16];
+
+ 
+    mask_sig();
 
     context *pcontext = arg;
     pglobal = pcontext->pglobal;
@@ -1596,6 +1642,8 @@ void *server_thread(void *arg)
                     free(pcfd);
                     continue;
                 }
+                snprintf(namebuf, 16, "C%s", name);
+                pthread_setname_np(client, namebuf);
                 pthread_detach(client);
             }
         }

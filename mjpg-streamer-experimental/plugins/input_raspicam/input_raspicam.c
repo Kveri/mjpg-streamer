@@ -374,31 +374,53 @@ static void encoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buf
 {
   int complete = 0;
 
+  DBG("encoder_buffer_callback()\n");
+
   // We pass our file handle and other stuff in via the userdata field.
   PORT_USERDATA *pData = (PORT_USERDATA *)port->userdata;
 
   if (pData)
   {
+    DBG("pData ok()\n");
     if (buffer->length)
     {
       mmal_buffer_header_mem_lock(buffer);
+      DBG("mmal_buffer_header_mem_lock() ok\n");
 
       //fprintf(stderr, "The flags are %x of length %i offset %i\n", buffer->flags, buffer->length, pData->offset);
 
       //Write bytes
       /* copy JPG picture to global buffer */
-      if(pData->offset == 0)
+      if(pData->offset == 0) {
+        DBG("pre-lock pause check\n");
+        if (pglobal->paused == 1) {
+          DBG("paused, exitting...\n");
+          mmal_buffer_header_mem_unlock(buffer);
+          return;
+        }
+        DBG("pthread_mutex_lock() locking\n");
         pthread_mutex_lock(&pglobal->in[plugin_number].db);
+        if (pglobal->paused == 1) {
+          DBG("paused, exitting 2...\n");
+          pthread_mutex_unlock(&pglobal->in[plugin_number].db);
+          mmal_buffer_header_mem_unlock(buffer);
+          return;
+        }
+        DBG("pthread_mutex_lock() locked\n");
+      }
 
       memcpy(pData->offset + pglobal->in[plugin_number].buf, buffer->data, buffer->length);
       pData->offset += buffer->length;
       //fwrite(buffer->data, 1, buffer->length, pData->file_handle);
       mmal_buffer_header_mem_unlock(buffer);
+      DBG("mmal_buffer_header_mem_unlock() ok\n");
     }
 
     // Now flag if we have completed
+    DBG("checking if we completed\n");
     if (buffer->flags & (MMAL_BUFFER_HEADER_FLAG_FRAME_END | MMAL_BUFFER_HEADER_FLAG_TRANSMISSION_FAILED))
     {
+      DBG("we DID complete\n");
       //set frame size
       pglobal->in[plugin_number].size = pData->offset;
 
@@ -414,6 +436,7 @@ static void encoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buf
 
       pData->offset = 0;
       /* signal fresh_frame */
+      DBG("signalling fresh frame %p\n", &pglobal->in[plugin_number].db_update);
       pthread_cond_broadcast(&pglobal->in[plugin_number].db_update);
       pthread_mutex_unlock(&pglobal->in[plugin_number].db);
     }
@@ -455,6 +478,7 @@ static void encoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buf
   if (complete)
     vcos_semaphore_post(&(pData->complete_semaphore));
 
+  DBG("encoder_buffer_callback() END\n");
 }
 
 /**
@@ -485,7 +509,15 @@ static void camera_control_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buf
  ******************************************************************************/
 int input_run(int id)
 {
+  DBG("starting, buf = %p", pglobal->in[id].buf);
+  if (pglobal->in[id].buf != NULL) {
+    free(pglobal->in[id].buf);
+    pglobal->in[id].buf = NULL;
+  }
+  
   pglobal->in[id].buf = malloc(width * height * 3);
+
+
   if (pglobal->in[id].buf == NULL)
   {
     fprintf(stderr, "could not allocate memory\n");
@@ -498,6 +530,7 @@ int input_run(int id)
     fprintf(stderr, "could not start worker thread\n");
     exit(EXIT_FAILURE);
   }
+  pthread_setname_np(worker, "input_raspicam");
   pthread_detach(worker);
 
   return 0;
@@ -574,6 +607,16 @@ void help(void)
 
 }
 
+void mask_sig(void)
+{
+	sigset_t mask;
+	sigemptyset(&mask); 
+	sigaddset(&mask, SIGRTMIN+3); 
+
+	pthread_sigmask(SIG_BLOCK, &mask, NULL);
+					        
+}
+
 /******************************************************************************
   Description.: setup mmal and callback
   Input Value.: arg is not used
@@ -582,6 +625,8 @@ void help(void)
 void *worker_thread(void *arg)
 {
   int i = 0;
+
+  mask_sig();
 
   /* set cleanup handler to cleanup allocated resources */
   pthread_cleanup_push(worker_cleanup, NULL);
@@ -622,6 +667,7 @@ void *worker_thread(void *arg)
   bcm_host_init();
   DBG("Host init, starting mmal stuff\n");
 
+  DBG("1\n");
   status = mmal_component_create(MMAL_COMPONENT_DEFAULT_CAMERA, &camera);
   if (status != MMAL_SUCCESS)
   {
@@ -629,6 +675,7 @@ void *worker_thread(void *arg)
     exit(EXIT_FAILURE);
   }
 
+  DBG("2\n");
   if (!camera->output_num)
   {
     fprintf(stderr, "Camera doesn't have output ports\n");
@@ -636,6 +683,7 @@ void *worker_thread(void *arg)
     exit(EXIT_FAILURE);
   }
 
+  DBG("3\n");
   camera_preview_port = camera->output[MMAL_CAMERA_PREVIEW_PORT];
   camera_video_port = camera->output[MMAL_CAMERA_VIDEO_PORT];
   camera_still_port = camera->output[MMAL_CAMERA_CAPTURE_PORT];
@@ -644,6 +692,7 @@ void *worker_thread(void *arg)
   // Enable the camera, and tell it its control callback function
   status = mmal_port_enable(camera->control, camera_control_callback);
 
+  DBG("4\n");
   if (status)
   {
     fprintf(stderr, "Unable to enable camera port\n");
@@ -669,6 +718,7 @@ void *worker_thread(void *arg)
     mmal_port_parameter_set(camera->control, &cam_config.hdr);
   }
 
+  DBG("5\n");
   //Set camera parameters
   if (raspicamcontrol_set_all_parameters(camera, &c_params))
     fprintf(stderr, "camera parameters couldn't be set\n");
@@ -685,6 +735,7 @@ void *worker_thread(void *arg)
   format->es->video.crop.height = height;
   format->es->video.frame_rate.num = PREVIEW_FRAME_RATE_NUM;
   format->es->video.frame_rate.den = PREVIEW_FRAME_RATE_DEN;
+  DBG("6\n");
 
   status = mmal_port_format_commit(camera_preview_port);
 
@@ -696,6 +747,7 @@ void *worker_thread(void *arg)
     fprintf(stderr, "Unable to create preview component\n");
     exit(EXIT_FAILURE);
   }
+  DBG("7\n");
 
   if (!preview->input_num)
   {
@@ -720,6 +772,7 @@ void *worker_thread(void *arg)
   param.fullscreen = 1;
 
   status = mmal_port_parameter_set(preview_input_port, &param.hdr);
+  DBG("8\n");
 
   if (status != MMAL_SUCCESS && status != MMAL_ENOSYS)
   {
@@ -749,6 +802,7 @@ void *worker_thread(void *arg)
     if (camera_video_port->buffer_num < VIDEO_OUTPUT_BUFFERS_NUM)
       camera_video_port->buffer_num = VIDEO_OUTPUT_BUFFERS_NUM;
   }
+  DBG("9\n");
 
   format = camera_still_port->format;
 
@@ -764,6 +818,7 @@ void *worker_thread(void *arg)
   format->es->video.frame_rate.den = STILLS_FRAME_RATE_DEN;
 
   status = mmal_port_format_commit(camera_still_port);
+  DBG("10\n");
 
   if (status)
   {
@@ -776,6 +831,7 @@ void *worker_thread(void *arg)
   if (camera_still_port->buffer_num < VIDEO_OUTPUT_BUFFERS_NUM)
     camera_still_port->buffer_num = VIDEO_OUTPUT_BUFFERS_NUM;
 
+  DBG("11\n");
 
   /* Enable component */
   status = mmal_component_enable(camera);
@@ -785,6 +841,7 @@ void *worker_thread(void *arg)
     mmal_component_destroy(camera);
     exit(EXIT_FAILURE);
   }
+  DBG("12\n");
 
   /* Enable component */
   status = mmal_component_enable(preview);
@@ -936,7 +993,9 @@ void *worker_thread(void *arg)
 
 
   // Enable the encoder output port and tell it its callback function
+  DBG("callback setting encoder_buffer_callback\n");
   status = mmal_port_enable(encoder->output[0], encoder_buffer_callback);
+  DBG("callback set encoder_buffer_callback\n");
   if (status)
   {
     fprintf(stderr, "Unable to enable encoder component\n");
@@ -1018,7 +1077,8 @@ void *worker_thread(void *arg)
     if (mmal_port_parameter_set_boolean(camera_video_port, MMAL_PARAMETER_CAPTURE, 1) != MMAL_SUCCESS)
       fprintf(stderr, "starting capture failed");
 
-    while(!pglobal->stop) usleep(1000);
+    while(!pglobal->stop && pglobal->paused == 0) usleep(1000);
+    DBG("ENDLOOP\n");
   }
 
   vcos_semaphore_delete(&callback_data.complete_semaphore);
@@ -1087,19 +1147,19 @@ void *worker_thread(void *arg)
  ******************************************************************************/
 void worker_cleanup(void *arg)
 {
-  static unsigned char first_run = 1;
-
-  if (!first_run)
+  if (pglobal->clean)
   {
     DBG("already cleaned up resources\n");
     return;
   }
 
-  first_run = 0;
+  pglobal->clean = 0;
   DBG("cleaning up resources allocated by input thread\n");
 
-  if(pglobal->in[plugin_number].buf != NULL)
+  if(pglobal->in[plugin_number].buf != NULL) {
     free(pglobal->in[plugin_number].buf);
+    pglobal->in[plugin_number].buf = NULL;
+  }
 }
 
 
