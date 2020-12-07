@@ -17,7 +17,7 @@ I analysed various solutions:
 
 Another thing to note is that the bitrate of the stream is relatively high, it is mjpeg, so no inter-frame compression is possible, so transmission outside of local LAN/wifi was problematic. So I wanted to have the stream as low quality as possible, just enough to see that something is happening and whether there is a failed print, a fire, etc. But to still get very good quality timelapses.
 
-So I hacked mjpg-streamer a bit. The main idea is: when octolapse wants to take a snapshot it somehow signals mjpg-streamer (which runs with relatively low settings) to disconnect from the camera, but to keep the HTTP output context alive. Then raspistill can take the snapshot using max settings. Then octolapse again signals mjpg-streamer to continue streaming by re-connecting to the camera.
+So I hacked mjpg-streamer a bit. The main idea is: when octolapse wants to take a snapshot it somehow signals mjpg-streamer (which runs with relatively low settings) to disconnect from the camera, but to keep the HTTP output context alive. Then raspistill can take the snapshot using max settings. Then octolapse again signals mjpg-streamer to continue streaming by re-connecting to the camera. The stream refreshes, because from HTTP/mjpeg point of view this is just a delay in sending photos. It freezes for a few seconds in browser but always automatically recovers.
 
 The "signal" is a simple file, when created mjpg-streamer detects this and pauses itself. After removed, mjpg-streamer un-pauses itself. Mjpg-streamer stays paused while the file exists.
 
