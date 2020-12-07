@@ -1,20 +1,38 @@
 mjpg-streamer
 =============
 
-This is a fork of http://sourceforge.net/projects/mjpg-streamer/ with added support for the Raspberry Pi camera via the input_raspicam plugin.
+This is a dirty fork of jacksonliam/mjpg-streamer. Mjpg-streamer is used by OctoPrint to live stream 3D printing. I also use octolapse to make timelapse of almost each print.
 
-mjpg-streamer is a command line application that copies JPEG frames from one
-or more input plugins to multiple output plugins. It can be used to stream
-JPEG files over an IP-based network from a webcam to various types of viewers
-such as Chrome, Firefox, Cambozola, VLC, mplayer, and other software capable
-of receiving MJPG streams.
+There are two problems with the original implementation:
 
-It was originally written for embedded devices with very limited resources in
-terms of RAM and CPU. Its predecessor "uvc_streamer" was created because
-Linux-UVC compatible cameras directly produce JPEG-data, allowing fast and
-perfomant M-JPEG streams even from an embedded device running OpenWRT. The
-input module "input_uvc.so" captures such JPG frames from a connected webcam.
-mjpg-streamer now supports a variety of different input devices.
+1. the quality of the stream and the quality of the timelapse photos is the same, because the photo is always taken from the stream
+This means that either the stream has to be high quality and then photos are high quality as well. This is good for timelapse but RPi 4 can only handle 2-3fps of max resolusion of RPi Camera v2, so the stream is severely low-fps and also good 5 seconds behind real-time. Alternatively the stream can be made low-quality but then the timelapse is also low-res.
+2. it is not possible to run raspistill to take timelapse snapshot directly from the camera while the stream is running, because the RPi camera is used by mjpg-streamer and raspistill can't access the port.
+
+I analysed various solutions:
+1. extend mjpg-streamer to take still photos at correct intervals (whenever signalled by octolapse), this proved to be to difficult
+2. shutdown mjpg-streamer, take the photo using raspistill and start mjpg-streamer every time octolapse needs to take a photo - this interrupts the stream which I didn't like and browser/app refresh is necessary - it doesn't recover automatically and probably some healthcheck would be needed in the GUI
+3. use some mid quality resolution good for stream as well as photos - this didn't work out because any relatively good quality for photos already provided very low fps for the stream. I was frustrated by the non-realtimeness and lagging of the video.
+4. don't use mjpeg but rather encode to mpeg-ts/x264, etc. - RPi 4 performance is not good enough for real-time transcoding
+
+Another thing to note is that the bitrate of the stream is relatively high, it is mjpeg, so no inter-frame compression is possible, so transmission outside of local LAN/wifi was problematic. So I wanted to have the stream as low quality as possible, just enough to see that something is happening and whether there is a failed print, etc. But to still get very good quality timelapses.
+
+So I hacked mjpg-streamer a bit. The main idea is: when octolapse wants to take a snapshot it somehow signals mjpg-streamer (which runs with relatively low settings) to disconnect from the camera, but to keep the HTTP output context alive. Then raspistill can take the snapshot using max settings. Then octolapse again signals mjpg-streamer to continue streaming by re-connecting to the camera.
+
+The "signal" is a simple file, when created mjpg-streamer detects this and pauses itself. After removed, mjpg-streamer un-pauses itself. Mjpg-streamer stays paused while the file exists.
+
+This required some dirty hacks because mjpg-streamer is multi-threaded and to disconnect from the camera almost all internal structures had to be destroyed. I took great care to prevent any memory leaks and I tested this on multiple ~700 layer prints without mjpg-streamer restart, so it should be hopefully fine.
+
+I used linux signals at first and not file, but signals can be "lost" (i.e. when received during an interrupt) and then the whole idea falls apart.
+
+HOWTO:
+- compile as standard mjpg-streamer
+- mjpg-streamer checks every few milliseconds for file /run/mjpg_streamer_paused.lock. If it exists, mjpg-streamer is paused (disconnected from the camera)
+- setup "before-snapshot.sh" as "before snapshot" script in octolapse - this creates the pause file and waits until mjpg-streamer disconnects from the camera, then takes the photo and deletes the pause file
+- create a symlink ~/mjpg-streamer/www/snap.jpg to /run/snap.jpg, so that the snapshot is accessible through the mjpg-streamer web server and octolapse can get it
+- run your new mjpg-streamer normally
+
+Original mjpg-streamer howto, compile guide, etc...
 
 Security warning
 ----------------
