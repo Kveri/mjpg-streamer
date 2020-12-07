@@ -10,12 +10,12 @@ This means that either the stream has to be high quality and then photos are hig
 2. it is not possible to run raspistill to take timelapse snapshot directly from the camera while the stream is running, because the RPi camera is used by mjpg-streamer and raspistill can't access the port.
 
 I analysed various solutions:
-1. extend mjpg-streamer to take still photos at correct intervals (whenever signalled by octolapse), this proved to be to difficult
+1. extend mjpg-streamer to take still photos at correct intervals (whenever signalled by octolapse), this proved to be too difficult
 2. shutdown mjpg-streamer, take the photo using raspistill and start mjpg-streamer every time octolapse needs to take a photo - this interrupts the stream which I didn't like and browser/app refresh is necessary - it doesn't recover automatically and probably some healthcheck would be needed in the GUI
 3. use some mid quality resolution good for stream as well as photos - this didn't work out because any relatively good quality for photos already provided very low fps for the stream. I was frustrated by the non-realtimeness and lagging of the video.
 4. don't use mjpeg but rather encode to mpeg-ts/x264, etc. - RPi 4 performance is not good enough for real-time transcoding
 
-Another thing to note is that the bitrate of the stream is relatively high, it is mjpeg, so no inter-frame compression is possible, so transmission outside of local LAN/wifi was problematic. So I wanted to have the stream as low quality as possible, just enough to see that something is happening and whether there is a failed print, etc. But to still get very good quality timelapses.
+Another thing to note is that the bitrate of the stream is relatively high, it is mjpeg, so no inter-frame compression is possible, so transmission outside of local LAN/wifi was problematic. So I wanted to have the stream as low quality as possible, just enough to see that something is happening and whether there is a failed print, a fire, etc. But to still get very good quality timelapses.
 
 So I hacked mjpg-streamer a bit. The main idea is: when octolapse wants to take a snapshot it somehow signals mjpg-streamer (which runs with relatively low settings) to disconnect from the camera, but to keep the HTTP output context alive. Then raspistill can take the snapshot using max settings. Then octolapse again signals mjpg-streamer to continue streaming by re-connecting to the camera.
 
